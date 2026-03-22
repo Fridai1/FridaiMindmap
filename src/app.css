@@ -1,0 +1,25 @@
+:root {
+	--sidebar-width: 240px;
+}
+
+body {
+	display: grid;
+	grid-template-columns: var(--sidebar-width) 1fr;
+	min-height: 100vh;
+	margin: 0;
+	background-color: darkslateblue;
+}
+
+.sidebar {
+	position: sticky;
+	top: 0;
+	height: 100vh;
+	overflow-y: auto;
+	background-color: #1a1a1a;
+	padding: 1rem;
+}
+
+main {
+	padding: 1rem;
+	overflow-y: auto;
+}
