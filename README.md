@@ -40,3 +40,17 @@ npm run build
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+
+## Database
+
+This app uses SQLite via [Drizzle ORM](https://orm.drizzle.team). The database file (`brain.db`) lives in the project root.
+
+### Commands
+
+```sh
+# Apply schema changes to the database (run this after editing src/lib/server/db/schema.ts)
+npm run db:push
+
+# Open Drizzle Studio — a visual browser for your database
+npm run db:studio
+```
