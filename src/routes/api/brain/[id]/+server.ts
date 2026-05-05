@@ -4,9 +4,22 @@ import { db } from '$lib/server/db';
 import { brainItems, type NewBrainItem } from '$lib/server/db/schema';
 
 const categories = ['todo', 'thought', 'idea', 'note'] as const;
+const priorities = [1, 2, 3] as const;
 
 type BrainItemUpdate = Partial<
-	Pick<NewBrainItem, 'text' | 'category' | 'x' | 'y' | 'rotation' | 'baseX' | 'baseY'>
+	Pick<
+		NewBrainItem,
+		| 'text'
+		| 'category'
+		| 'deadline'
+		| 'priority'
+		| 'project'
+		| 'x'
+		| 'y'
+		| 'rotation'
+		| 'baseX'
+		| 'baseY'
+	>
 >;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -22,6 +35,33 @@ function validateNumber(value: unknown, field: string) {
 		throw error(400, `${field} must be a finite number`);
 	}
 	return value;
+}
+
+function validateOptionalIsoDate(value: unknown, field: string) {
+	if (value === null) return null;
+	if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+		throw error(400, `${field} must be an ISO date string or null`);
+	}
+	return new Date(value).toISOString();
+}
+
+function validateOptionalPriority(value: unknown) {
+	if (value === null) return null;
+	if (typeof value !== 'number' || !priorities.includes(value as (typeof priorities)[number])) {
+		throw error(400, 'priority must be 1, 2, 3, or null');
+	}
+	return value;
+}
+
+function validateOptionalProject(value: unknown) {
+	if (value === null) return null;
+	if (typeof value !== 'string') throw error(400, 'project must be a string or null');
+	const project = value.trim().toLowerCase();
+	if (!project) return null;
+	if (!/^[a-z0-9_-]{1,40}$/.test(project)) {
+		throw error(400, 'project must use letters, numbers, underscores, or dashes');
+	}
+	return project;
 }
 
 export async function PATCH({ request, params }) {
@@ -41,6 +81,9 @@ export async function PATCH({ request, params }) {
 		if (!isCategory(body.category)) throw error(400, 'invalid category');
 		update.category = body.category;
 	}
+	if ('deadline' in body) update.deadline = validateOptionalIsoDate(body.deadline, 'deadline');
+	if ('priority' in body) update.priority = validateOptionalPriority(body.priority);
+	if ('project' in body) update.project = validateOptionalProject(body.project);
 	if ('x' in body) update.x = validateNumber(body.x, 'x');
 	if ('y' in body) update.y = validateNumber(body.y, 'y');
 	if ('baseX' in body) update.baseX = validateNumber(body.baseX, 'baseX');

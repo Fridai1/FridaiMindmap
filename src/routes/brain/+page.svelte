@@ -1,14 +1,20 @@
 <script lang="ts">
+	import { page } from '$app/state';
+	import { tick } from 'svelte';
 	import type { PageData } from './$types';
 
 	type Category = 'todo' | 'thought' | 'idea' | 'note';
-	type OrderMode = 'freeform' | 'category' | 'date';
+	type OrderMode = 'freeform' | 'category' | 'date' | 'priority' | 'deadline';
+	type Priority = 1 | 2 | 3;
 
 	interface BrainItem {
 		id: number;
 		text: string;
 		category: Category;
 		dateAdded: Date;
+		deadline: Date | null;
+		priority: Priority | null;
+		project: string | null;
 		x: number;
 		y: number;
 		rotation: number;
@@ -25,6 +31,20 @@
 		idea: { color: '#ffd43b', bg: 'rgba(255, 212, 59, 0.12)', label: 'Idea', emoji: '💡' },
 		note: { color: '#8ce99a', bg: 'rgba(140, 233, 154, 0.12)', label: 'Note', emoji: '📝' }
 	};
+	const WEEKDAYS: Record<string, number> = {
+		sunday: 0,
+		monday: 1,
+		tuesday: 2,
+		wednesday: 3,
+		thursday: 4,
+		friday: 5,
+		saturday: 6
+	};
+	const DEADLINE_PATTERN =
+		/(?:^|\s)@(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi;
+	const PRIORITY_PATTERN = /(?:^|\s)p([123])\b/gi;
+	const CATEGORY_PATTERN = /(?:^|\s)#(todo|thought|idea|note)\b/gi;
+	const PROJECT_PATTERN = /(?:^|\s)!([a-z0-9_-]{1,40})\b/gi;
 
 	function rand(min: number, max: number) {
 		return Math.random() * (max - min) + min;
@@ -36,7 +56,9 @@
 		data.items.map((row) => ({
 			...row,
 			category: row.category as Category,
-			dateAdded: new Date(row.dateAdded)
+			dateAdded: new Date(row.dateAdded),
+			deadline: row.deadline ? new Date(row.deadline) : null,
+			priority: row.priority as Priority | null
 		}))
 	);
 
@@ -49,16 +71,48 @@
 	let orderMode = $state<OrderMode>('freeform');
 	let displacements = $state<Record<number, { x: number; y: number }>>({});
 	let showAdd = $state(false);
+	let newTextEl = $state<HTMLTextAreaElement>();
 	let newText = $state('');
 	let newCategory = $state<Category>('thought');
+	let newDeadline = $state<Date | null>(null);
+	let newPriority = $state<Priority | null>(null);
+	let newProject = $state<string | null>(null);
+	let projectQuery = $state<string | null>(null);
+	let projectTokenStart = $state<number | null>(null);
+	let selectedProjectIndex = $state(0);
+	let existingProjects = $derived(
+		Array.from(
+			new Set(items.map((item) => item.project).filter((project) => project !== null))
+		).sort()
+	);
+	let projectSuggestions = $derived(
+		projectQuery === null
+			? []
+			: existingProjects.filter((project) => project.startsWith(projectQuery ?? '')).slice(0, 8)
+	);
+
+	$effect(() => {
+		if (!showAdd) return;
+		tick().then(() => newTextEl?.focus());
+	});
+
+	$effect(() => {
+		if (page.url.searchParams.get('add') === '1') showAdd = true;
+	});
+
+	$effect(() => {
+		window.addEventListener('open-brain-add', openAddModal);
+		return () => window.removeEventListener('open-brain-add', openAddModal);
+	});
 
 	const REPEL_RADIUS = 15;
 	const REPEL_STRENGTH = 10;
 	const MIN_ZOOM = 0.28;
 	const MAX_ZOOM = 2.2;
 	const CARD_WIDTH = 175;
-	const CARD_HEIGHT = 128;
+	const CARD_HEIGHT = 160;
 	const FIT_PADDING = 40;
+	const SPAWN_GAP = 24;
 
 	function clamp(value: number, min: number, max: number) {
 		return Math.max(min, Math.min(max, value));
@@ -144,6 +198,245 @@
 	function resetView() {
 		pan = { x: 0, y: 0 };
 		zoom = 1;
+	}
+
+	function visibleWorldBounds() {
+		const rect = containerEl.getBoundingClientRect();
+		return {
+			left: (-pan.x / zoom / rect.width) * 100,
+			top: (-pan.y / zoom / rect.height) * 100,
+			right: ((rect.width - pan.x) / zoom / rect.width) * 100,
+			bottom: ((rect.height - pan.y) / zoom / rect.height) * 100
+		};
+	}
+
+	function cardSizePercent() {
+		const rect = containerEl.getBoundingClientRect();
+		return {
+			width: ((CARD_WIDTH + SPAWN_GAP) / rect.width) * 100,
+			height: ((CARD_HEIGHT + SPAWN_GAP) / rect.height) * 100
+		};
+	}
+
+	function cardsOverlap(
+		a: { x: number; y: number; width: number; height: number },
+		b: { x: number; y: number; width: number; height: number }
+	) {
+		return !(
+			a.x + a.width <= b.x ||
+			b.x + b.width <= a.x ||
+			a.y + a.height <= b.y ||
+			b.y + b.height <= a.y
+		);
+	}
+
+	function isSpawnOpen(x: number, y: number, width: number, height: number) {
+		const candidate = { x, y, width, height };
+		return items.every((item) => {
+			const d = displacements[item.id] ?? { x: 0, y: 0 };
+			return !cardsOverlap(candidate, { x: item.x + d.x, y: item.y + d.y, width, height });
+		});
+	}
+
+	function findSpawnInBounds(
+		bounds: { left: number; top: number; right: number; bottom: number },
+		width: number,
+		height: number
+	) {
+		const centerX = (bounds.left + bounds.right) / 2;
+		const centerY = (bounds.top + bounds.bottom) / 2;
+		const minX = bounds.left + 2;
+		const minY = bounds.top + 2;
+		const maxX = bounds.right - width - 2;
+		const maxY = bounds.bottom - height - 2;
+		const candidates: { x: number; y: number; distance: number }[] = [];
+
+		if (maxX < minX || maxY < minY) {
+			const x = centerX - width / 2;
+			const y = centerY - height / 2;
+			if (isSpawnOpen(x, y, width, height)) return { x, y };
+			return null;
+		}
+
+		const stepX = Math.max(width * 0.7, 8);
+		const stepY = Math.max(height * 0.7, 10);
+		for (let y = minY; y <= maxY; y += stepY) {
+			for (let x = minX; x <= maxX; x += stepX) {
+				candidates.push({ x, y, distance: Math.hypot(x - centerX, y - centerY) });
+			}
+		}
+
+		candidates.push({
+			x: centerX - width / 2,
+			y: centerY - height / 2,
+			distance: 0
+		});
+		candidates.sort((a, b) => a.distance - b.distance);
+
+		return (
+			candidates.find((candidate) => isSpawnOpen(candidate.x, candidate.y, width, height)) ?? null
+		);
+	}
+
+	function pickSpawnPosition() {
+		if (!containerEl) return { x: rand(2, 70), y: rand(4, 65), shouldFocus: false };
+
+		const bounds = visibleWorldBounds();
+		const size = cardSizePercent();
+		const visibleSpawn = findSpawnInBounds(bounds, size.width, size.height);
+		if (visibleSpawn) return { ...visibleSpawn, shouldFocus: false };
+
+		const visibleWidth = bounds.right - bounds.left;
+		const visibleHeight = bounds.bottom - bounds.top;
+		const centerX = (bounds.left + bounds.right) / 2;
+		const centerY = (bounds.top + bounds.bottom) / 2;
+
+		for (let ring = 1; ring <= 60; ring += 1) {
+			const expanded = {
+				left: centerX - visibleWidth / 2 - ring * size.width,
+				top: centerY - visibleHeight / 2 - ring * size.height,
+				right: centerX + visibleWidth / 2 + ring * size.width,
+				bottom: centerY + visibleHeight / 2 + ring * size.height
+			};
+			const spawn = findSpawnInBounds(expanded, size.width, size.height);
+			if (spawn) return { ...spawn, shouldFocus: true };
+		}
+
+		return { x: centerX, y: bounds.bottom + size.height, shouldFocus: true };
+	}
+
+	function focusSpawnedCard(x: number, y: number) {
+		if (!containerEl) return;
+		const rect = containerEl.getBoundingClientRect();
+		pan = {
+			x: rect.width / 2 - ((x / 100) * rect.width + CARD_WIDTH / 2) * zoom,
+			y: rect.height / 2 - ((y / 100) * rect.height + CARD_HEIGHT / 2) * zoom
+		};
+	}
+
+	function openAddModal() {
+		showAdd = true;
+	}
+
+	function dateAtNoon(date: Date) {
+		return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
+	}
+
+	function addDays(date: Date, days: number) {
+		return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days, 12);
+	}
+
+	function deadlineFromToken(token: string) {
+		const normalized = token.toLowerCase();
+		const today = dateAtNoon(new Date());
+		if (normalized === 'today') return today;
+		if (normalized === 'tomorrow') return addDays(today, 1);
+
+		const targetDay = WEEKDAYS[normalized];
+		let daysUntil = (targetDay - today.getDay() + 7) % 7;
+		if (daysUntil === 0) daysUntil = 7;
+		return addDays(today, daysUntil);
+	}
+
+	function parseDraft(value: string) {
+		const categoryMatch = value.match(/(?:^|\s)#(todo|thought|idea|note)\b/i);
+		const priorityMatch = value.match(/(?:^|\s)p([123])\b/i);
+		const deadlineMatch = value.match(
+			/(?:^|\s)@(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i
+		);
+		const projectMatch = value.match(/(?:^|\s)!([a-z0-9_-]{1,40})\b/i);
+
+		return {
+			category: categoryMatch ? (categoryMatch[1].toLowerCase() as Category) : null,
+			priority: priorityMatch ? (Number(priorityMatch[1]) as Priority) : null,
+			deadline: deadlineMatch ? deadlineFromToken(deadlineMatch[1]) : null,
+			project: projectMatch ? projectMatch[1].toLowerCase() : null,
+			text: value
+				.replace(CATEGORY_PATTERN, ' ')
+				.replace(PRIORITY_PATTERN, ' ')
+				.replace(DEADLINE_PATTERN, ' ')
+				.replace(PROJECT_PATTERN, ' ')
+				.replace(/\s+/g, ' ')
+				.trim()
+		};
+	}
+
+	function updateProjectAutocomplete(cursor: number) {
+		const beforeCursor = newText.slice(0, cursor);
+		const match = beforeCursor.match(/(?:^|\s)!([a-z0-9_-]*)$/i);
+		if (!match || match.index === undefined) {
+			projectQuery = null;
+			projectTokenStart = null;
+			selectedProjectIndex = 0;
+			return;
+		}
+
+		const nextQuery = match[1].toLowerCase();
+		const nextTokenStart = match.index + match[0].indexOf('!');
+		const queryChanged = projectQuery !== nextQuery || projectTokenStart !== nextTokenStart;
+
+		projectQuery = nextQuery;
+		projectTokenStart = nextTokenStart;
+		if (queryChanged) selectedProjectIndex = 0;
+	}
+
+	function updateDraftText(value: string) {
+		newText = value;
+		const parsed = parseDraft(value);
+		if (parsed.category) newCategory = parsed.category;
+		newPriority = parsed.priority;
+		newDeadline = parsed.deadline;
+		newProject = parsed.project;
+	}
+
+	function handleDraftInput(e: Event) {
+		const textarea = e.currentTarget as HTMLTextAreaElement;
+		updateDraftText(textarea.value);
+		updateProjectAutocomplete(textarea.selectionStart);
+	}
+
+	function confirmProjectSuggestion(project: string) {
+		if (projectTokenStart === null || !newTextEl) return;
+		const cursor = newTextEl.selectionStart;
+		const before = newText.slice(0, projectTokenStart);
+		const after = newText.slice(cursor);
+		const nextText = `${before}!${project} ${after}`;
+		const nextCursor = before.length + project.length + 2;
+
+		updateDraftText(nextText);
+		projectQuery = null;
+		projectTokenStart = null;
+		selectedProjectIndex = 0;
+		tick().then(() => {
+			newTextEl?.focus();
+			newTextEl?.setSelectionRange(nextCursor, nextCursor);
+		});
+	}
+
+	function onDraftKeydown(e: KeyboardEvent) {
+		if (projectQuery !== null && projectSuggestions.length > 0) {
+			if (e.ctrlKey && e.key.toLowerCase() === 'n') {
+				e.preventDefault();
+				selectedProjectIndex = (selectedProjectIndex + 1) % projectSuggestions.length;
+				return;
+			}
+			if (e.ctrlKey && e.key.toLowerCase() === 'p') {
+				e.preventDefault();
+				selectedProjectIndex =
+					(selectedProjectIndex - 1 + projectSuggestions.length) % projectSuggestions.length;
+				return;
+			}
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				confirmProjectSuggestion(projectSuggestions[selectedProjectIndex]);
+				return;
+			}
+		}
+
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			addItem();
+		}
 	}
 
 	function startDrag(e: MouseEvent, id: number) {
@@ -240,8 +533,20 @@
 		if (mode === 'category') {
 			const order: Category[] = ['todo', 'idea', 'thought', 'note'];
 			sorted.sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category));
+		} else if (mode === 'priority') {
+			sorted.sort((a, b) => {
+				const ap = a.priority ?? 99;
+				const bp = b.priority ?? 99;
+				return ap - bp || b.dateAdded.getTime() - a.dateAdded.getTime();
+			});
+		} else if (mode === 'deadline') {
+			sorted.sort((a, b) => {
+				const ad = a.deadline?.getTime() ?? Infinity;
+				const bd = b.deadline?.getTime() ?? Infinity;
+				return ad - bd || b.dateAdded.getTime() - a.dateAdded.getTime();
+			});
 		} else {
-			sorted.sort((a, b) => a.dateAdded.getTime() - b.dateAdded.getTime());
+			sorted.sort((a, b) => b.dateAdded.getTime() - a.dateAdded.getTime());
 		}
 		const cols = 4;
 		items = sorted.map((item, i) => ({
@@ -254,14 +559,30 @@
 
 	async function addItem() {
 		if (!newText.trim()) return;
-		const x = rand(2, 70);
-		const y = rand(4, 65);
+		const parsed = parseDraft(newText);
+		const text = parsed.text;
+		if (!text) return;
+		const spawn = pickSpawnPosition();
+		const x = spawn.x;
+		const y = spawn.y;
 		const rotation = rand(-7, 7);
+		const deadline = parsed.deadline?.toISOString() ?? null;
+		const priority = parsed.priority;
+		const project = parsed.project;
 
 		const res = await fetch('/api/brain', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ text: newText.trim(), category: newCategory, x, y, rotation })
+			body: JSON.stringify({
+				text,
+				category: newCategory,
+				deadline,
+				priority,
+				project,
+				x,
+				y,
+				rotation
+			})
 		});
 
 		const saved = await res.json();
@@ -272,6 +593,9 @@
 				text: saved.text,
 				category: saved.category as Category,
 				dateAdded: new Date(saved.dateAdded),
+				deadline: saved.deadline ? new Date(saved.deadline) : null,
+				priority: saved.priority as Priority | null,
+				project: saved.project,
 				x: saved.x,
 				y: saved.y,
 				rotation: saved.rotation,
@@ -281,7 +605,13 @@
 		];
 
 		newText = '';
+		newDeadline = null;
+		newPriority = null;
+		newProject = null;
+		projectQuery = null;
+		projectTokenStart = null;
 		showAdd = false;
+		if (spawn.shouldFocus) focusSpawnedCard(x, y);
 	}
 
 	function deleteItem(id: number) {
@@ -291,6 +621,10 @@
 
 	function fmt(d: Date) {
 		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+	}
+
+	function fmtDeadline(d: Date) {
+		return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 	}
 </script>
 
@@ -308,6 +642,12 @@
 				>Category</button
 			>
 			<button class:active={orderMode === 'date'} onclick={() => setOrder('date')}>Date</button>
+			<button class:active={orderMode === 'priority'} onclick={() => setOrder('priority')}
+				>Priority</button
+			>
+			<button class:active={orderMode === 'deadline'} onclick={() => setOrder('deadline')}
+				>Deadline</button
+			>
 		</div>
 		<button class="add-btn" onclick={() => (showAdd = true)}>＋ Add</button>
 	</div>
@@ -385,6 +725,17 @@
 						>
 					</div>
 					<p class="card-text">{item.text}</p>
+					<div class="card-meta">
+						{#if item.project}
+							<span class="project-pill">!{item.project}</span>
+						{/if}
+						{#if item.priority}
+							<span class="priority-pill priority-{item.priority}">P{item.priority}</span>
+						{/if}
+						{#if item.deadline}
+							<span class="deadline-pill">Due {fmtDeadline(item.deadline)}</span>
+						{/if}
+					</div>
 					<div class="card-date">{fmt(item.dateAdded)}</div>
 				</div>
 			{/each}
@@ -409,7 +760,24 @@
 			aria-label="Add a thought"
 			tabindex="0"
 		>
-			<h2>Add to Brain</h2>
+			<div class="modal-heading">
+				<h2>Add to Brain</h2>
+				<div class="shortcut-help">
+					<button type="button" aria-label="Show input shortcuts">i</button>
+					<div class="shortcut-popover" role="tooltip">
+						<strong>Shortcuts</strong>
+						<span
+							><code>#todo</code>, <code>#idea</code>, <code>#thought</code>,
+							<code>#note</code></span
+						>
+						<span><code>@today</code>, <code>@tomorrow</code>, <code>@monday</code> etc.</span>
+						<span><code>p1</code>, <code>p2</code>, <code>p3</code> for priority</span>
+						<span
+							><code>!mindmap</code> for project. Use <code>Ctrl+n</code>/<code>Ctrl+p</code>.</span
+						>
+					</div>
+				</div>
+			</div>
 			<div class="cat-picker">
 				{#each Object.entries(CATEGORY_CONFIG) as [cat, cfg] (cat)}
 					<button
@@ -421,16 +789,41 @@
 				{/each}
 			</div>
 			<textarea
-				bind:value={newText}
+				bind:this={newTextEl}
+				value={newText}
+				oninput={handleDraftInput}
 				placeholder="What's on your mind?"
 				rows={3}
-				onkeydown={(e) => {
-					if (e.key === 'Enter' && !e.shiftKey) {
-						e.preventDefault();
-						addItem();
-					}
-				}}
+				onkeydown={onDraftKeydown}
+				onclick={(e) => updateProjectAutocomplete(e.currentTarget.selectionStart)}
+				onkeyup={(e) => updateProjectAutocomplete(e.currentTarget.selectionStart)}
 			></textarea>
+			{#if projectQuery !== null && projectSuggestions.length > 0}
+				<div class="project-suggestions">
+					{#each projectSuggestions as project, index (project)}
+						<button
+							class:selected={index === selectedProjectIndex}
+							type="button"
+							onmousedown={(e) => e.preventDefault()}
+							onclick={() => confirmProjectSuggestion(project)}
+						>
+							!{project}
+						</button>
+					{/each}
+				</div>
+			{/if}
+			<div class="draft-meta" aria-live="polite">
+				<span>{CATEGORY_CONFIG[newCategory].emoji} {CATEGORY_CONFIG[newCategory].label}</span>
+				{#if newProject}
+					<span class="project-pill">!{newProject}</span>
+				{/if}
+				{#if newPriority}
+					<span class="priority-pill priority-{newPriority}">P{newPriority}</span>
+				{/if}
+				{#if newDeadline}
+					<span class="deadline-pill">Due {fmtDeadline(newDeadline)}</span>
+				{/if}
+			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => (showAdd = false)}>Cancel</button>
 				<button class="btn-add" onclick={addItem} disabled={!newText.trim()}>Add</button>
@@ -753,6 +1146,64 @@
 		color: rgba(255, 255, 255, 0.3);
 	}
 
+	.card-meta,
+	.draft-meta {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		flex-wrap: wrap;
+	}
+
+	.card-meta {
+		margin-bottom: 0.45rem;
+	}
+
+	.priority-pill,
+	.deadline-pill,
+	.project-pill,
+	.draft-meta span {
+		display: inline-flex;
+		align-items: center;
+		min-height: 1.25rem;
+		padding: 0.12rem 0.45rem;
+		border-radius: 999px;
+		font-size: 0.62rem;
+		font-weight: 700;
+		line-height: 1;
+	}
+
+	.priority-pill {
+		color: #fff;
+	}
+
+	.priority-1 {
+		background: rgba(255, 107, 107, 0.75);
+	}
+
+	.priority-2 {
+		background: rgba(255, 212, 59, 0.72);
+		color: #1f1600;
+	}
+
+	.priority-3 {
+		background: rgba(116, 192, 252, 0.65);
+		color: #061827;
+	}
+
+	.deadline-pill,
+	.project-pill,
+	.draft-meta span {
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(255, 255, 255, 0.07);
+		color: rgba(255, 255, 255, 0.72);
+	}
+
+	.project-pill {
+		border-color: rgba(124, 58, 237, 0.35);
+		background: rgba(124, 58, 237, 0.18);
+		color: #c4b5fd;
+	}
+
 	/* ── Add modal ── */
 	.backdrop {
 		position: fixed;
@@ -778,11 +1229,71 @@
 		box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
 	}
 
+	.modal-heading {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+
 	.modal h2 {
 		margin: 0;
 		font-size: 1.05rem;
 		color: #fff;
 		font-weight: 600;
+	}
+
+	.shortcut-help {
+		position: relative;
+	}
+
+	.shortcut-help button {
+		width: 1.45rem;
+		height: 1.45rem;
+		border-radius: 50%;
+		border: 1px solid rgba(255, 255, 255, 0.18);
+		background: rgba(255, 255, 255, 0.06);
+		color: rgba(255, 255, 255, 0.7);
+		cursor: help;
+		font-size: 0.78rem;
+		font-weight: 800;
+		font-style: italic;
+	}
+
+	.shortcut-popover {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 0.5rem);
+		z-index: 20;
+		width: 250px;
+		display: none;
+		flex-direction: column;
+		gap: 0.45rem;
+		padding: 0.8rem;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		border-radius: 12px;
+		background: rgba(8, 8, 16, 0.96);
+		box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+		color: rgba(255, 255, 255, 0.68);
+		font-size: 0.75rem;
+		line-height: 1.45;
+	}
+
+	.shortcut-help:hover .shortcut-popover,
+	.shortcut-help:focus-within .shortcut-popover {
+		display: flex;
+	}
+
+	.shortcut-popover strong {
+		color: #fff;
+		font-size: 0.78rem;
+	}
+
+	.shortcut-popover code {
+		padding: 0.08rem 0.25rem;
+		border-radius: 4px;
+		background: rgba(255, 255, 255, 0.1);
+		color: #fff;
 	}
 
 	.cat-picker {
@@ -832,6 +1343,38 @@
 
 	.modal textarea::placeholder {
 		color: rgba(255, 255, 255, 0.3);
+	}
+
+	.project-suggestions {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		margin-top: -0.55rem;
+		padding: 0.35rem;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 10px;
+		background: rgba(255, 255, 255, 0.04);
+	}
+
+	.project-suggestions button {
+		padding: 0.42rem 0.55rem;
+		border: 0;
+		border-radius: 7px;
+		background: transparent;
+		color: rgba(255, 255, 255, 0.62);
+		cursor: pointer;
+		font-size: 0.8rem;
+		text-align: left;
+	}
+
+	.project-suggestions button:hover,
+	.project-suggestions button.selected {
+		background: rgba(124, 58, 237, 0.22);
+		color: #fff;
+	}
+
+	.draft-meta {
+		min-height: 1.4rem;
 	}
 
 	.modal-footer {
