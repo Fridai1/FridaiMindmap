@@ -16,8 +16,7 @@ body {
 	min-height: 100vh;
 	margin: 0;
 	background-color: var(--main-bg);
-	font-family:
-		-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 	color: #fff;
 }
 
@@ -175,4 +174,55 @@ main {
 	padding: 1.25rem;
 	overflow-y: auto;
 	min-height: 100vh;
+}
+
+@media (max-width: 720px) {
+	:root {
+		--sidebar-width: 100%;
+	}
+
+	body {
+		display: flex;
+		flex-direction: column;
+		min-height: 100svh;
+	}
+
+	.sidebar {
+		position: static;
+		height: auto;
+		padding: 0.75rem;
+		border-right: 0;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	}
+
+	.sidebar-logo,
+	.sidebar-footer,
+	.nav-label {
+		display: none;
+	}
+
+	.nav-section {
+		flex-direction: row;
+		gap: 0.4rem;
+	}
+
+	.sidebar a {
+		flex: 1;
+		justify-content: center;
+	}
+
+	.sidebar a.active::before {
+		left: 20%;
+		top: auto;
+		right: 20%;
+		bottom: -0.75rem;
+		width: auto;
+		height: 3px;
+		border-radius: 2px 2px 0 0;
+	}
+
+	main {
+		min-height: 0;
+		padding: 0.9rem;
+	}
 }

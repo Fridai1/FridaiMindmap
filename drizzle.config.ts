@@ -5,6 +5,6 @@ export default defineConfig({
 	out: './drizzle',
 	dialect: 'sqlite',
 	dbCredentials: {
-		url: './brain.db'
+		url: process.env.BRAIN_DB_PATH ?? './brain.db'
 	}
 });
