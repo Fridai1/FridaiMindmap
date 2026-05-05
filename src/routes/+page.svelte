@@ -9,7 +9,10 @@
 		Capture loose thoughts, notes, ideas, and todos in a visual brain board that stays saved to
 		SQLite.
 	</p>
-	<a href={resolve('/brain')}>Open Brain</a>
+	<div class="home-actions">
+		<a href={resolve('/brain')}>Open Brain</a>
+		<a class="secondary" href={resolve('/plants')}>Open Plants</a>
+	</div>
 </section>
 
 <style>
@@ -53,6 +56,12 @@
 		line-height: 1.7;
 	}
 
+	.home-actions {
+		display: flex;
+		gap: 0.7rem;
+		flex-wrap: wrap;
+	}
+
 	a {
 		width: fit-content;
 		padding: 0.7rem 1rem;
@@ -65,5 +74,14 @@
 
 	a:hover {
 		background: #6d28d9;
+	}
+
+	a.secondary {
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		background: rgba(255, 255, 255, 0.06);
+	}
+
+	a.secondary:hover {
+		background: rgba(255, 255, 255, 0.12);
 	}
 </style>
