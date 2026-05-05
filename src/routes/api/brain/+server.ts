@@ -2,15 +2,37 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { brainItems } from '$lib/server/db/schema';
 
-export async function POST({ request }) {
-	const body = await request.json();
+const categories = ['todo', 'thought', 'idea', 'note'] as const;
 
-	if (!body.text?.trim()) {
-		error(400, 'text is required');
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
+function isCategory(value: unknown): value is (typeof categories)[number] {
+	return typeof value === 'string' && categories.includes(value as (typeof categories)[number]);
+}
+
+function finiteNumber(value: unknown, field: string) {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		throw error(400, `${field} must be a finite number`);
 	}
-	if (!['todo', 'thought', 'idea', 'note'].includes(body.category)) {
-		error(400, 'invalid category');
+	return value;
+}
+
+export async function POST({ request }) {
+	const body: unknown = await request.json();
+	if (!isRecord(body)) throw error(400, 'request body must be an object');
+
+	if (typeof body.text !== 'string' || !body.text.trim()) {
+		throw error(400, 'text is required');
 	}
+	if (!isCategory(body.category)) {
+		throw error(400, 'invalid category');
+	}
+
+	const x = finiteNumber(body.x, 'x');
+	const y = finiteNumber(body.y, 'y');
+	const rotation = finiteNumber(body.rotation, 'rotation');
 
 	const [item] = await db
 		.insert(brainItems)
@@ -18,11 +40,11 @@ export async function POST({ request }) {
 			text: body.text.trim(),
 			category: body.category,
 			dateAdded: new Date().toISOString(),
-			x: body.x,
-			y: body.y,
-			rotation: body.rotation,
-			baseX: body.x,
-			baseY: body.y
+			x,
+			y,
+			rotation,
+			baseX: x,
+			baseY: y
 		})
 		.returning();
 

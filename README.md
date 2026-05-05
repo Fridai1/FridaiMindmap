@@ -43,11 +43,14 @@ You can preview the production build with `npm run preview`.
 
 ## Database
 
-This app uses SQLite via [Drizzle ORM](https://orm.drizzle.team). The database file (`brain.db`) lives in the project root.
+This app uses SQLite via [Drizzle ORM](https://orm.drizzle.team). By default, the database file (`brain.db`) lives in the project root. Set `BRAIN_DB_PATH` to use a different file in development or production.
 
 ### Commands
 
 ```sh
+# Generate migrations after editing src/lib/server/db/schema.ts
+npm run db:generate
+
 # Apply schema changes to the database (run this after editing src/lib/server/db/schema.ts)
 npm run db:push
 
