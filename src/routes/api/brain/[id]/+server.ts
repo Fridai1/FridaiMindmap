@@ -100,6 +100,9 @@ export async function DELETE({ params }) {
 	const id = parseInt(params.id);
 	if (isNaN(id)) throw error(400, 'invalid id');
 
-	await db.delete(brainItems).where(eq(brainItems.id, id));
+	await db
+		.update(brainItems)
+		.set({ deletedAt: new Date().toISOString() })
+		.where(eq(brainItems.id, id));
 	return json({ ok: true });
 }

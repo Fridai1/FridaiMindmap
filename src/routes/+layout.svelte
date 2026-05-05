@@ -9,7 +9,8 @@
 
 	const links = [
 		{ href: '/', label: 'Home', icon: '⌂' },
-		{ href: '/brain', label: 'Brain', icon: '🧠' }
+		{ href: '/brain', label: 'Brain', icon: '🧠' },
+		{ href: '/plants', label: 'Plants', icon: '⌘' }
 	] as const;
 
 	function isTextEntryTarget(target: EventTarget | null) {
