@@ -5,6 +5,8 @@ import { brainItems, type NewBrainItem } from '$lib/server/db/schema';
 
 const categories = ['todo', 'thought', 'idea', 'note'] as const;
 const priorities = [1, 2, 3] as const;
+const recurrences = ['daily', 'weekly', 'monthly'] as const;
+const projectColumns = ['backlog', 'next', 'doing', 'done'] as const;
 
 type BrainItemUpdate = Partial<
 	Pick<
@@ -19,6 +21,12 @@ type BrainItemUpdate = Partial<
 		| 'rotation'
 		| 'baseX'
 		| 'baseY'
+		| 'completedAt'
+		| 'archivedAt'
+		| 'recurrence'
+		| 'projectColumn'
+		| 'promotedDate'
+		| 'promotedSlot'
 	>
 >;
 
@@ -64,6 +72,45 @@ function validateOptionalProject(value: unknown) {
 	return project;
 }
 
+function validateOptionalDateOnly(value: unknown, field: string) {
+	if (value === null) return null;
+	if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+		throw error(400, `${field} must be YYYY-MM-DD or null`);
+	}
+	return value;
+}
+
+function validateOptionalPromotedSlot(value: unknown) {
+	if (value === null) return null;
+	if (value !== 'major' && value !== 'minor')
+		throw error(400, 'promotedSlot must be major, minor, or null');
+	return value;
+}
+
+function validateOptionalRecurrence(value: unknown) {
+	if (value === null) return null;
+	if (typeof value !== 'string' || !recurrences.includes(value as (typeof recurrences)[number])) {
+		throw error(400, 'recurrence must be daily, weekly, monthly, or null');
+	}
+	return value as (typeof recurrences)[number];
+}
+
+function validateOptionalProjectColumn(value: unknown) {
+	if (value === null) return null;
+	if (
+		typeof value !== 'string' ||
+		!projectColumns.includes(value as (typeof projectColumns)[number])
+	) {
+		throw error(400, 'projectColumn must be backlog, next, doing, done, or null');
+	}
+	return value as (typeof projectColumns)[number];
+}
+
+function nextRecurringDeadline(from: Date, recurrence: (typeof recurrences)[number]) {
+	const days = recurrence === 'daily' ? 1 : recurrence === 'weekly' ? 7 : 30;
+	return new Date(from.getFullYear(), from.getMonth(), from.getDate() + days, 12).toISOString();
+}
+
 export async function PATCH({ request, params }) {
 	const id = parseInt(params.id);
 	if (isNaN(id)) throw error(400, 'invalid id');
@@ -89,8 +136,28 @@ export async function PATCH({ request, params }) {
 	if ('baseX' in body) update.baseX = validateNumber(body.baseX, 'baseX');
 	if ('baseY' in body) update.baseY = validateNumber(body.baseY, 'baseY');
 	if ('rotation' in body) update.rotation = validateNumber(body.rotation, 'rotation');
+	if ('completedAt' in body)
+		update.completedAt = validateOptionalIsoDate(body.completedAt, 'completedAt');
+	if ('archivedAt' in body)
+		update.archivedAt = validateOptionalIsoDate(body.archivedAt, 'archivedAt');
+	if ('recurrence' in body) update.recurrence = validateOptionalRecurrence(body.recurrence);
+	if ('projectColumn' in body)
+		update.projectColumn = validateOptionalProjectColumn(body.projectColumn);
+	if ('promotedDate' in body)
+		update.promotedDate = validateOptionalDateOnly(body.promotedDate, 'promotedDate');
+	if ('promotedSlot' in body) update.promotedSlot = validateOptionalPromotedSlot(body.promotedSlot);
 
 	if (Object.keys(update).length === 0) throw error(400, 'nothing to update');
+
+	if (update.completedAt) {
+		const [item] = await db.select().from(brainItems).where(eq(brainItems.id, id)).limit(1);
+		if (item?.recurrence) {
+			update.completedAt = null;
+			update.deadline = nextRecurringDeadline(new Date(), item.recurrence);
+			update.promotedDate = null;
+			update.promotedSlot = null;
+		}
+	}
 
 	await db.update(brainItems).set(update).where(eq(brainItems.id, id));
 	return json({ ok: true });
