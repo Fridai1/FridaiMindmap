@@ -13,6 +13,12 @@ export const brainItems = sqliteTable('brain_items', {
 	rotation: real('rotation').notNull(),
 	baseX: real('base_x').notNull(),
 	baseY: real('base_y').notNull(),
+	completedAt: text('completed_at'),
+	archivedAt: text('archived_at'),
+	recurrence: text('recurrence', { enum: ['daily', 'weekly', 'monthly'] }),
+	projectColumn: text('project_column', { enum: ['backlog', 'next', 'doing', 'done'] }),
+	promotedDate: text('promoted_date'),
+	promotedSlot: text('promoted_slot', { enum: ['major', 'minor'] }),
 	deletedAt: text('deleted_at')
 });
 

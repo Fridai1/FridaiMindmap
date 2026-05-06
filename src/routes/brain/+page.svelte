@@ -614,9 +614,12 @@
 		if (spawn.shouldFocus) focusSpawnedCard(x, y);
 	}
 
-	function deleteItem(id: number) {
+	async function deleteItem(id: number) {
+		const previousItems = items;
 		items = items.filter((i) => i.id !== id);
-		fetch(`/api/brain/${id}`, { method: 'DELETE' });
+
+		const response = await fetch(`/api/brain/${id}`, { method: 'DELETE' });
+		if (!response.ok) items = previousItems;
 	}
 
 	function fmt(d: Date) {
@@ -717,6 +720,7 @@
 						<div class="card-tag" style:color={cfg.color}>{cfg.emoji} {cfg.label}</div>
 						<button
 							class="delete-btn"
+							onmousedown={(e) => e.stopPropagation()}
 							onclick={(e) => {
 								e.stopPropagation();
 								deleteItem(item.id);
