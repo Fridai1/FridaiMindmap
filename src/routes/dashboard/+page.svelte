@@ -1,9 +1,8 @@
 <script lang="ts">
+	import type { Category, Recurrence } from '$lib/domain';
 	import type { PageData } from './$types';
 
-	type Category = 'todo' | 'thought' | 'idea' | 'note';
 	type PromotedSlot = 'major' | 'minor';
-	type Recurrence = 'daily' | 'weekly' | 'monthly';
 
 	interface BrainItem {
 		id: number;
@@ -29,8 +28,8 @@
 
 	let { data }: { data: PageData } = $props();
 	let query = $state('');
-	let items = $derived<BrainItem[]>(
-		data.items.map((item) => ({
+	function mapBrainItem(item: PageData['items'][number]): BrainItem {
+		return {
 			...item,
 			category: item.category as Category,
 			dateAdded: new Date(item.dateAdded),
@@ -39,8 +38,10 @@
 			archivedAt: item.archivedAt ? new Date(item.archivedAt) : null,
 			recurrence: item.recurrence as Recurrence | null,
 			promotedSlot: item.promotedSlot as PromotedSlot | null
-		}))
-	);
+		};
+	}
+
+	let items = $derived<BrainItem[]>(data.items.map(mapBrainItem));
 	let plants = $derived<Plant[]>(
 		data.plants.map((plant) => ({
 			...plant,
@@ -93,12 +94,6 @@
 		return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 	}
 
-	function nextRecurringDeadline(recurrence: Recurrence) {
-		const now = new Date();
-		const days = recurrence === 'daily' ? 1 : recurrence === 'weekly' ? 7 : 30;
-		return new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, 12);
-	}
-
 	function fmt(date: Date | null) {
 		return date?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) ?? 'No date';
 	}
@@ -126,47 +121,15 @@
 	}
 
 	async function patchItem(id: number, body: Record<string, unknown>) {
-		await fetch(`/api/brain/${id}`, {
+		const response = await fetch(`/api/brain/${id}`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(body)
 		});
-		items = items.map((item) =>
-			item.id === id
-				? {
-						...item,
-						...body,
-						completedAt:
-							'completedAt' in body && item.recurrence && 'deadline' in body
-								? null
-								: 'completedAt' in body
-									? body.completedAt
-										? new Date(body.completedAt as string)
-										: null
-									: item.completedAt,
-						archivedAt:
-							'archivedAt' in body
-								? body.archivedAt
-									? new Date(body.archivedAt as string)
-									: null
-								: item.archivedAt,
-						deadline:
-							'deadline' in body
-								? body.deadline
-									? new Date(body.deadline as string)
-									: null
-								: item.deadline,
-						promotedSlot:
-							'promotedSlot' in body
-								? (body.promotedSlot as PromotedSlot | null)
-								: item.promotedSlot,
-						promotedDate:
-							'promotedDate' in body ? (body.promotedDate as string | null) : item.promotedDate,
-						recurrence:
-							'recurrence' in body ? (body.recurrence as Recurrence | null) : item.recurrence
-					}
-				: item
-		);
+		if (!response.ok) return;
+
+		const saved = mapBrainItem(await response.json());
+		items = items.map((item) => (item.id === id ? saved : item));
 	}
 
 	function promote(item: BrainItem, slot: PromotedSlot) {
@@ -178,16 +141,6 @@
 	}
 
 	function complete(item: BrainItem) {
-		if (item.recurrence) {
-			patchItem(item.id, {
-				completedAt: new Date().toISOString(),
-				deadline: nextRecurringDeadline(item.recurrence).toISOString(),
-				promotedDate: null,
-				promotedSlot: null
-			});
-			return;
-		}
-
 		patchItem(item.id, {
 			completedAt: new Date().toISOString(),
 			promotedDate: null,

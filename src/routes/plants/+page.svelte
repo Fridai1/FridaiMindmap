@@ -1,7 +1,6 @@
 <script lang="ts">
+	import type { Light } from '$lib/domain';
 	import type { PageData } from './$types';
-
-	type Light = 'low' | 'medium' | 'bright_indirect' | 'direct';
 
 	interface Plant {
 		id: number;
@@ -25,16 +24,18 @@
 
 	let { data }: { data: PageData } = $props();
 
-	let plants = $derived<Plant[]>(
-		data.plants.map((plant) => ({
+	function mapPlant(plant: PageData['plants'][number]): Plant {
+		return {
 			...plant,
 			light: plant.light as Light,
 			lastWatered: plant.lastWatered ? new Date(plant.lastWatered) : null,
 			nextWatering: new Date(plant.nextWatering),
 			waterCount: plant.waterCount ?? 0,
 			createdAt: new Date(plant.createdAt)
-		}))
-	);
+		};
+	}
+
+	let plants = $derived<Plant[]>(data.plants.map(mapPlant));
 
 	let showAdd = $state(false);
 	let plantPendingDelete = $state<Plant | null>(null);
@@ -103,19 +104,10 @@
 				notes: form.notes
 			})
 		});
+		if (!res.ok) return;
 
-		const saved = await res.json();
-		plants = [
-			...plants,
-			{
-				...saved,
-				light: saved.light as Light,
-				lastWatered: saved.lastWatered ? new Date(saved.lastWatered) : null,
-				nextWatering: new Date(saved.nextWatering),
-				waterCount: saved.waterCount ?? 0,
-				createdAt: new Date(saved.createdAt)
-			}
-		];
+		const saved = mapPlant(await res.json());
+		plants = [...plants, saved];
 		form = {
 			name: '',
 			species: '',
@@ -134,24 +126,17 @@
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ wateredToday: true })
 		});
-		const saved = await res.json();
-		plants = plants.map((item) =>
-			item.id === plant.id
-				? {
-						...saved,
-						light: saved.light as Light,
-						lastWatered: saved.lastWatered ? new Date(saved.lastWatered) : null,
-						nextWatering: new Date(saved.nextWatering),
-						waterCount: saved.waterCount ?? 0,
-						createdAt: new Date(saved.createdAt)
-					}
-				: item
-		);
+		if (!res.ok) return;
+
+		const saved = mapPlant(await res.json());
+		plants = plants.map((item) => (item.id === plant.id ? saved : item));
 		scheduleReminders();
 	}
 
 	async function deletePlant(plant: Plant) {
-		await fetch(`/api/plants/${plant.id}`, { method: 'DELETE' });
+		const res = await fetch(`/api/plants/${plant.id}`, { method: 'DELETE' });
+		if (!res.ok) return;
+
 		plants = plants.filter((item) => item.id !== plant.id);
 		const nextFlipped = { ...flippedCards };
 		delete nextFlipped[plant.id];

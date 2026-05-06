@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { tick } from 'svelte';
+	import type { Category, Priority } from '$lib/domain';
 	import type { PageData } from './$types';
 
-	type Category = 'todo' | 'thought' | 'idea' | 'note';
 	type OrderMode = 'freeform' | 'category' | 'date' | 'priority' | 'deadline';
-	type Priority = 1 | 2 | 3;
 
 	interface BrainItem {
 		id: number;
@@ -52,15 +51,17 @@
 
 	let { data }: { data: PageData } = $props();
 
-	let items = $derived<BrainItem[]>(
-		data.items.map((row) => ({
+	function mapBrainItem(row: PageData['items'][number]): BrainItem {
+		return {
 			...row,
 			category: row.category as Category,
 			dateAdded: new Date(row.dateAdded),
 			deadline: row.deadline ? new Date(row.deadline) : null,
 			priority: row.priority as Priority | null
-		}))
-	);
+		};
+	}
+
+	let items = $derived<BrainItem[]>(data.items.map(mapBrainItem));
 
 	let containerEl: HTMLElement;
 	let dragging: { id: number; offsetX: number; offsetY: number } | null = $state(null);
@@ -512,9 +513,8 @@
 		});
 		displacements = {};
 
-		// Fire-and-forget — UI is already updated, no need to await
 		for (const { id: itemId, x, y } of toSave) {
-			fetch(`/api/brain/${itemId}`, {
+			void fetch(`/api/brain/${itemId}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ x, y, baseX: x, baseY: y })
@@ -584,25 +584,10 @@
 				rotation
 			})
 		});
+		if (!res.ok) return;
 
-		const saved = await res.json();
-		items = [
-			...items,
-			{
-				id: saved.id,
-				text: saved.text,
-				category: saved.category as Category,
-				dateAdded: new Date(saved.dateAdded),
-				deadline: saved.deadline ? new Date(saved.deadline) : null,
-				priority: saved.priority as Priority | null,
-				project: saved.project,
-				x: saved.x,
-				y: saved.y,
-				rotation: saved.rotation,
-				baseX: saved.baseX,
-				baseY: saved.baseY
-			}
-		];
+		const saved = mapBrainItem(await res.json());
+		items = [...items, saved];
 
 		newText = '';
 		newDeadline = null;

@@ -1,8 +1,8 @@
 <script lang="ts">
+	import type { ProjectColumn } from '$lib/domain';
 	import type { PageData } from './$types';
 
 	type PromotedSlot = 'major' | 'minor';
-	type ProjectColumn = 'backlog' | 'next' | 'doing' | 'done';
 
 	interface Item {
 		id: number;
@@ -26,16 +26,18 @@
 	];
 
 	let { data }: { data: PageData } = $props();
-	let items = $derived<Item[]>(
-		data.items.map((item) => ({
+	function mapItem(item: PageData['items'][number]): Item {
+		return {
 			...item,
 			deadline: item.deadline ? new Date(item.deadline) : null,
 			completedAt: item.completedAt ? new Date(item.completedAt) : null,
 			archivedAt: item.archivedAt ? new Date(item.archivedAt) : null,
 			projectColumn: item.projectColumn as ProjectColumn | null,
 			promotedSlot: item.promotedSlot as PromotedSlot | null
-		}))
-	);
+		};
+	}
+
+	let items = $derived<Item[]>(data.items.map(mapItem));
 	let projects = $derived(
 		Array.from(new Set(items.map((item) => item.project).filter(Boolean) as string[])).sort()
 	);
@@ -48,25 +50,39 @@
 		return items.filter((item) => (item.projectColumn ?? 'backlog') === column);
 	}
 
-	function moveItem(id: number, projectColumn: ProjectColumn) {
+	async function moveItem(id: number, projectColumn: ProjectColumn) {
+		const previousItems = items;
 		items = items.map((item) => (item.id === id ? { ...item, projectColumn } : item));
-		fetch(`/api/brain/${id}`, {
+		const response = await fetch(`/api/brain/${id}`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ projectColumn })
 		});
+		if (!response.ok) {
+			items = previousItems;
+			return;
+		}
+		const saved = mapItem(await response.json());
+		items = items.map((item) => (item.id === id ? saved : item));
 	}
 
-	function archiveItem(id: number) {
+	async function archiveItem(id: number) {
+		const previousItems = items;
 		const archivedAt = new Date().toISOString();
 		items = items.map((item) =>
 			item.id === id ? { ...item, archivedAt: new Date(archivedAt) } : item
 		);
-		fetch(`/api/brain/${id}`, {
+		const response = await fetch(`/api/brain/${id}`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ archivedAt })
 		});
+		if (!response.ok) {
+			items = previousItems;
+			return;
+		}
+		const saved = mapItem(await response.json());
+		items = items.map((item) => (item.id === id ? saved : item));
 	}
 
 	function onDragStart(e: DragEvent, item: Item) {
